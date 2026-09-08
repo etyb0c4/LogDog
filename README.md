@@ -1,7 +1,7 @@
 # LogDog - IP Log Analyzer
 
 ![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)
-![License](https://img.shields.io/badge/License-GPLv3-green.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 An open-source system log analyzer for detecting and analyzing IP activities on Linux systems.
 
