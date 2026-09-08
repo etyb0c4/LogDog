@@ -16,9 +16,9 @@ from collections import Counter
 import argparse
 import subprocess
 
-class logdog:
-    def __init__(self):
-        self.ips_count = Counter()
+class LogDog:
+    def __init__(self) -> None:
+        self.ips_count: Counter = Counter()
         self.ip_regex = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
         self.time = re.compile(r"^\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}|\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}|\w+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})")
         self.wtmp_time = re.compile(r"\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?|\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}(:\d{2})?|\w+\s+\d{1,2}\s+\d{2}:\d{2}(:\d{2})?)")
@@ -29,18 +29,20 @@ class logdog:
         self.RED = "\033[91m"
         self.BLUE = "\033[34m"
         self.login = re.compile(r"(Accepted|Successful) (\S+) for (\w+) from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
+        # In `last` output the connected user is the first field of the line.
+        self.wtmp_user = re.compile(r"^(\S+)\s+(?:pts/|tty)")
 
-    def get_ips(self, filepath):
+    def get_ips(self, filepath: str) -> None:
         print(f"\n{self.BOLD}{self.BLUE}=== GENERAL IP ACTIVITY ==={self.RESET}")
         with open(filepath, "r") as file:
             for line in file:
                 found_ips = self.ip_regex.findall(line)
                 if found_ips:
                     self.ips_count.update(found_ips)
-            for ip,count in self.ips_count.most_common():
+            for ip, count in self.ips_count.most_common():
                 print(f"[{self.GREEN}+{self.RESET}] {self.BOLD}IP:{self.RESET} {self.CYAN}{ip:>18}{self.RESET} appears{self.GREEN}{count:>4}{self.RESET} times")
 
-    def get_successful_login(self, filepath):
+    def get_successful_login(self, filepath: str) -> None:
         print(f"\n{self.BOLD}{self.BLUE}=== SUCCESSFUL LOGINS / COMPROMISES ==={self.RESET}")
         found = 0
         with open(filepath) as file:
@@ -57,7 +59,7 @@ class logdog:
             if found == 0:
                 print("No successful login found.")
 
-    def get_activated_shells(self, filepath):
+    def get_activated_shells(self, filepath: str) -> None:
         print(f"\n{self.BOLD}{self.BLUE}=== ACTIVATED TERMINALS ==={self.RESET}")
         # Detect if the file is already plain text (e.g. someone gave us
         # the output of `last` directly) vs a raw binary wtmp/utmp file.
@@ -86,23 +88,34 @@ class logdog:
         found = 0
         for line in lines:
             if "pts/" in line or "tty" in line:
+                # Extract terminal identifier (pts/1, tty1, ttyS1, etc.)
+                terminal_match = re.search(r'(pts/\d+|tty\d+|ttyS\d+|pts)(\d+)?', line)
+                terminal = terminal_match.group(0) if terminal_match else "Unknown Terminal"
+
+                # Extract the connected user (first field of a `last` line)
+                user_match = self.wtmp_user.search(line)
+                user = user_match.group(1) if user_match else "Unknown User"
+
+                # Extract IP address
                 found_ip = self.ip_regex.search(line)
+                ip = found_ip.group(0) if found_ip else "Unknown IP"
+
+                # Extract timestamp - capture both entry and exit times if available
                 found_time = self.wtmp_time.search(line)
-                if found_ip:
-                    found = 1
-                    ip = found_ip.group(0)
-                    date = found_time.group(1).strip() if found_time else "Unkown Time"
-                    print(f"[{self.RED}WTMP SESSION{self.RESET}] Active session detected from {self.CYAN}{ip:<15}{self.RESET} at {date}")
+                time_str = found_time.group(1).strip() if found_time else "Unknown Time"
+
+                found = 1
+                print(f"[{self.RED}WTMP SESSION{self.RESET}] User: {self.GREEN}{user:<12}{self.RESET} | Terminal: {self.CYAN}{terminal:<10}{self.RESET} | IP: {self.CYAN}{ip:<15}{self.RESET} | Time: {time_str}")
         if found == 0:
             print("No terminal access found.") 
 
 
-def main():
-    parser = argparse.ArgumentParser(description="log file analyser")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Log file analyzer")
     parser.add_argument("-l", "--log", help="path to .log file")
     parser.add_argument("-w", "--wtmp", help="path to wtmp file")
     args = parser.parse_args()
-    log = logdog()
+    log = LogDog()
 
     if args.log:
         log.get_ips(args.log)
