@@ -11,10 +11,20 @@ print(r"│         >> IP Log Analyzer <<          │")
 print(r"└────────────────────────────────────────┘")
 
 import sys
+import os
 import re
 from collections import Counter
 import argparse
 import subprocess
+
+# sizeof(struct utmp) on Linux x86_64: a raw wtmp file is a whole number
+# of these fixed-size records.
+WTMP_RECORD_SIZE = 384
+
+
+class FileTypeError(Exception):
+    """Raised when a file is passed to the wrong option."""
+
 
 class LogDog:
     def __init__(self) -> None:
@@ -31,6 +41,63 @@ class LogDog:
         self.login = re.compile(r"(Accepted|Successful) (\S+) for (\w+) from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
         # In `last` output the connected user is the first field of the line.
         self.wtmp_user = re.compile(r"^(\S+)\s+(?:pts/|tty)")
+
+    def _probe(self, filepath: str) -> bytes:
+        try:
+            with open(filepath, "rb") as file:
+                return file.read(4096)
+        except IsADirectoryError:
+            raise FileTypeError(f"'{filepath}' is a directory, not a file.")
+        except FileNotFoundError:
+            raise FileTypeError(f"'{filepath}' does not exist.")
+        except PermissionError:
+            raise FileTypeError(f"'{filepath}' is not readable. Try running with sudo.")
+
+    def is_binary(self, filepath: str) -> bool:
+        sample = self._probe(filepath)
+        if b"\x00" in sample:
+            return True
+        try:
+            sample.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        return False
+
+    def looks_like_wtmp(self, filepath: str) -> bool:
+        try:
+            size = os.path.getsize(filepath)
+        except OSError:
+            return False
+        return size > 0 and size % WTMP_RECORD_SIZE == 0
+
+    def looks_like_syslog(self, filepath: str) -> bool:
+        # Syslog-style lines start with a timestamp; `last` output starts with
+        # a username, so the two are easy to tell apart.
+        with open(filepath, "r", encoding="utf-8", errors="replace") as file:
+            lines = [line for line in file.readlines()[:50] if line.strip()]
+        if not lines:
+            return False
+        dated = sum(1 for line in lines if self.time.match(line))
+        return dated / len(lines) >= 0.6
+
+    def validate_log(self, filepath: str) -> None:
+        """Reject a binary wtmp handed to -l/--log."""
+        if self.is_binary(filepath):
+            hint = " It looks like a wtmp/utmp record file." if self.looks_like_wtmp(filepath) else ""
+            raise FileTypeError(
+                f"'{filepath}' is a binary file, not a text log.{hint} "
+                f"Use -w/--wtmp instead of -l/--log."
+            )
+
+    def validate_wtmp(self, filepath: str) -> None:
+        """Reject a text log handed to -w/--wtmp (raw wtmp and `last` dumps pass)."""
+        if self.is_binary(filepath):
+            return
+        if self.looks_like_syslog(filepath):
+            raise FileTypeError(
+                f"'{filepath}' looks like a text log file, not a wtmp file or `last` output. "
+                f"Use -l/--log instead of -w/--wtmp."
+            )
 
     def get_ips(self, filepath: str) -> None:
         print(f"\n{self.BOLD}{self.BLUE}=== GENERAL IP ACTIVITY ==={self.RESET}")
@@ -117,13 +184,27 @@ def main() -> None:
     args = parser.parse_args()
     log = LogDog()
 
+    status = 0
+
     if args.log:
-        log.get_ips(args.log)
-        log.get_successful_login(args.log)
+        try:
+            log.validate_log(args.log)
+            log.get_ips(args.log)
+            log.get_successful_login(args.log)
+        except FileTypeError as error:
+            print(f"[{log.RED}ERROR{log.RESET}] {error}", file=sys.stderr)
+            status = 1
     if args.wtmp:
-        log.get_activated_shells(args.wtmp)
+        try:
+            log.validate_wtmp(args.wtmp)
+            log.get_activated_shells(args.wtmp)
+        except FileTypeError as error:
+            print(f"[{log.RED}ERROR{log.RESET}] {error}", file=sys.stderr)
+            status = 1
     if not (args.wtmp or args.log):
         parser.print_help()
+
+    sys.exit(status)
 
 if __name__ == "__main__":
     main()
